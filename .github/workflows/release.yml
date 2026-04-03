@@ -1,0 +1,58 @@
+# Build Mondo-ready ORDO OWL + LinkML YAML / OWL dump; publish release assets.
+# Pipeline: download latest ORDO OWL → ROBOT mirror → component (rename, fix reification,
+# exact-syn-from-label, property filter) → transform.py → validate → linkml-data2owl.
+# See docs/plan.md. Pinned stack: obolibrary/odkfull:v1.6 + uv (linkml-owl 0.4.2 per pyproject).
+
+name: Build and release
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * 1"
+  push:
+    branches: [main]
+    paths:
+      - "Makefile"
+      - "config/**"
+      - "sparql/**"
+      - "linkml/**"
+      - "scripts/**"
+      - "pyproject.toml"
+      - "uv.lock"
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build (ROBOT + LinkML)
+        run: |
+          docker run --rm \
+            -e ROBOT_PLUGINS_DIRECTORY=/tools/robot-plugins \
+            -v "$PWD:/work" \
+            -w /work \
+            obolibrary/odkfull:v1.6 \
+            bash -lc "pip3 install --break-system-packages uv && uv sync && make build-release"
+
+      - name: Set release tag
+        id: version
+        run: echo "tag=v$(date +%Y%m%d)-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Create release and upload assets
+        if: success() && hashFiles('ordo.yaml') != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.tag }}
+          files: |
+            ordo.yaml
+            ordo.owl
+            ordo_from_linkml.owl
+          generate_release_notes: true
+          draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

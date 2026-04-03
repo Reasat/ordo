@@ -1,0 +1,12 @@
+tmp/
+env/.env
+*.pyc
+__pycache__/
+.venv/
+uv.lock
+*.egg-info/
+dist/
+# Build artifacts — uploaded as release assets, not committed
+ordo.owl
+ordo.yaml
+ordo_from_linkml.owl
