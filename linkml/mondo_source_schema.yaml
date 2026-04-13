@@ -3,9 +3,9 @@ name: mondo_source_schema
 description: >-
   LinkML schema for a Mondo-ready ontology source. Core fields: labels, definitions,
   synonyms, hierarchy. Extended slots align with predicates allowed to remain on
-  ORDO component OWL after ROBOT preprocessing (see config/properties.txt); populate only what
+  component OWL after ROBOT preprocessing (see config/properties.txt); populate only what
   the transform exports.
-version: 0.3.1
+version: 0.4.0
 
 prefixes:
   linkml:     https://w3id.org/linkml/
@@ -28,6 +28,30 @@ default_prefix: mondo_src
 default_range: string
 
 
+# ── Enums ───────────────────────────────────────────────────────────────────
+
+enums:
+
+  SynonymTypeEnum:
+    description: Types of synonyms used in Mondo source ingests.
+    permissible_values:
+      omim_included:
+        description: Synonym from an included OMIM entry.
+        meaning: MONDO:omim_included
+      generated_from_label:
+        description: Synonym automatically generated from the label.
+        meaning: MONDO:GENERATED_FROM_LABEL
+      generated:
+        description: Automatically generated synonym.
+        meaning: MONDO:GENERATED
+      omim_formerly:
+        description: Synonym from a formerly associated OMIM entry.
+        meaning: MONDO:omim_formerly
+      abbreviation:
+        description: Abbreviation synonym.
+        meaning: MONDO:ABBREVIATION
+
+
 # ── Classes ──────────────────────────────────────────────────────────────────
 
 classes:
@@ -35,20 +59,20 @@ classes:
   OntologyDocument:
     description: >-
       Top-level container representing a single ontology source release.
-      Slots mirror owl:Ontology annotations on the component file (rdfs:label, versionInfo,
-      comments, source, dcterms:title). Ontology-level oboInOwl:hasExactSynonym (e.g. nested
-      synonym-type annotations) is not exported: linkml-owl can emit incomplete axiom
-      reification that ROBOT cannot parse.
     tree_root: true
     class_uri: owl:Ontology
     slots:
       - title
       - dcterms_title
       - version
-      - comments
       - sources
-      - descriptions
       - terms
+
+  Synonym:
+    description: A synonym value with an optional type annotation.
+    slots:
+      - synonym_text
+      - synonym_type
 
   OntologyTerm:
     description: >-
@@ -63,11 +87,6 @@ classes:
       - narrow_synonyms
       - broad_synonyms
       - close_synonyms
-      - obo_has_close_synonym
-      - database_cross_references
-      - comments
-      - see_also
-      - descriptions
       - in_subsets
       - sources
       - synonym_types
@@ -75,20 +94,39 @@ classes:
       - skos_broad_match
       - skos_narrow_match
       - skos_related_match
-      - mondo_generated
-      - mondo_generated_from_label
-      - mondo_omim_included
-      - mondo_omim_formerly
-      - mondo_abbreviation
       - omo_0003012
-      - ro_0004001
-      - ro_0004003
-      - ro_0004004
-      - bfo_0000050
-      - bfo_0000051
+      - has_material_basis_in_germline_mutation_in
+      - has_material_basis_in_somatic_mutation_in
+      - has_material_basis_in
+      - part_of
+      - has_part
       - parents
-      - is_root
       - deprecated
+    slot_usage:
+      exact_synonyms:
+        annotations:
+          owl.template: |-
+            {% for s in exact_synonyms %}
+            AnnotationAssertion({% if s.synonym_type %}Annotation(oboInOwl:hasSynonymType {{s.synonym_type.meaning}}) {% endif %}oboInOwl:hasExactSynonym {{id}} "{{s.synonym_text|replace('"', '\\"')}}")
+            {% endfor %}
+      related_synonyms:
+        annotations:
+          owl.template: |-
+            {% for s in related_synonyms %}
+            AnnotationAssertion({% if s.synonym_type %}Annotation(oboInOwl:hasSynonymType {{s.synonym_type.meaning}}) {% endif %}oboInOwl:hasRelatedSynonym {{id}} "{{s.synonym_text|replace('"', '\\"')}}")
+            {% endfor %}
+      narrow_synonyms:
+        annotations:
+          owl.template: |-
+            {% for s in narrow_synonyms %}
+            AnnotationAssertion({% if s.synonym_type %}Annotation(oboInOwl:hasSynonymType {{s.synonym_type.meaning}}) {% endif %}oboInOwl:hasNarrowSynonym {{id}} "{{s.synonym_text|replace('"', '\\"')}}")
+            {% endfor %}
+      broad_synonyms:
+        annotations:
+          owl.template: |-
+            {% for s in broad_synonyms %}
+            AnnotationAssertion({% if s.synonym_type %}Annotation(oboInOwl:hasSynonymType {{s.synonym_type.meaning}}) {% endif %}oboInOwl:hasBroadSynonym {{id}} "{{s.synonym_text|replace('"', '\\"')}}")
+            {% endfor %}
 
 
 # ── Slots ────────────────────────────────────────────────────────────────────
@@ -122,6 +160,16 @@ slots:
     inlined_as_list: true
     required: true
 
+  # -- Synonym fields --
+
+  synonym_text:
+    description: The synonym string value.
+    required: true
+
+  synonym_type:
+    description: Optional type annotation for this synonym.
+    range: SynonymTypeEnum
+
   # -- Term identity --
 
   id:
@@ -154,30 +202,30 @@ slots:
     description: Exact-match synonyms (oboInOwl:hasExactSynonym).
     slot_uri: oboInOwl:hasExactSynonym
     multivalued: true
+    range: Synonym
+    inlined_as_list: true
     recommended: true
-    annotations:
-      owl: AnnotationAssertion
 
   related_synonyms:
     description: Related synonyms (oboInOwl:hasRelatedSynonym).
     slot_uri: oboInOwl:hasRelatedSynonym
     multivalued: true
-    annotations:
-      owl: AnnotationAssertion
+    range: Synonym
+    inlined_as_list: true
 
   narrow_synonyms:
     description: Narrower synonyms (oboInOwl:hasNarrowSynonym).
     slot_uri: oboInOwl:hasNarrowSynonym
     multivalued: true
-    annotations:
-      owl: AnnotationAssertion
+    range: Synonym
+    inlined_as_list: true
 
   broad_synonyms:
     description: Broader synonyms (oboInOwl:hasBroadSynonym).
     slot_uri: oboInOwl:hasBroadSynonym
     multivalued: true
-    annotations:
-      owl: AnnotationAssertion
+    range: Synonym
+    inlined_as_list: true
 
   close_synonyms:
     description: skos:closeMatch (mapping / close match).
@@ -187,42 +235,7 @@ slots:
     annotations:
       owl: AnnotationAssertion
 
-  obo_has_close_synonym:
-    description: oboInOwl:hasCloseSynonym (distinct from skos:closeMatch).
-    slot_uri: oboInOwl:hasCloseSynonym
-    multivalued: true
-    annotations:
-      owl: AnnotationAssertion
-
-  # -- Cross-refs and extra annotations (config/properties.txt) --
-
-  database_cross_references:
-    description: oboInOwl:hasDbXref.
-    slot_uri: oboInOwl:hasDbXref
-    multivalued: true
-    annotations:
-      owl: AnnotationAssertion
-
-  comments:
-    description: rdfs:comment.
-    slot_uri: rdfs:comment
-    multivalued: true
-    annotations:
-      owl: AnnotationAssertion
-
-  see_also:
-    description: rdfs:seeAlso (IRIs or literals as serialized strings).
-    slot_uri: rdfs:seeAlso
-    multivalued: true
-    annotations:
-      owl: AnnotationAssertion
-
-  descriptions:
-    description: dcterms:description (distinct from IAO definition).
-    slot_uri: dcterms:description
-    multivalued: true
-    annotations:
-      owl: AnnotationAssertion
+  # -- Cross-refs and extra annotations --
 
   in_subsets:
     description: oboInOwl:inSubset.
@@ -278,41 +291,6 @@ slots:
     annotations:
       owl: AnnotationAssertion
 
-  mondo_generated:
-    description: mondo:GENERATED.
-    slot_uri: MONDO:GENERATED
-    multivalued: true
-    annotations:
-      owl: AnnotationAssertion
-
-  mondo_generated_from_label:
-    description: mondo:GENERATED_FROM_LABEL.
-    slot_uri: MONDO:GENERATED_FROM_LABEL
-    multivalued: true
-    annotations:
-      owl: AnnotationAssertion
-
-  mondo_omim_included:
-    description: mondo:omim_included.
-    slot_uri: MONDO:omim_included
-    multivalued: true
-    annotations:
-      owl: AnnotationAssertion
-
-  mondo_omim_formerly:
-    description: mondo:omim_formerly.
-    slot_uri: MONDO:omim_formerly
-    multivalued: true
-    annotations:
-      owl: AnnotationAssertion
-
-  mondo_abbreviation:
-    description: mondo:ABBREVIATION.
-    slot_uri: MONDO:ABBREVIATION
-    multivalued: true
-    annotations:
-      owl: AnnotationAssertion
-
   omo_0003012:
     description: OMO:0003012 (ontology metadata slot used on some terms).
     slot_uri: obo:OMO_0003012
@@ -322,45 +300,45 @@ slots:
 
   # -- Object properties (RO / BFO) allowed on component classes --
 
-  ro_0004001:
-    description: RO:0004001 object property targets.
+  has_material_basis_in_germline_mutation_in:
+    description: Germline mutation causal basis (RO:0004001).
     slot_uri: RO:0004001
     multivalued: true
-    range: uriorcurie
+    range: OntologyTerm
     annotations:
-      owl: AnnotationAssertion
+      owl: ObjectSomeValuesFrom
 
-  ro_0004003:
-    description: RO:0004003 object property targets.
+  has_material_basis_in_somatic_mutation_in:
+    description: Somatic mutation causal basis (RO:0004003).
     slot_uri: RO:0004003
     multivalued: true
-    range: uriorcurie
+    range: OntologyTerm
     annotations:
-      owl: AnnotationAssertion
+      owl: ObjectSomeValuesFrom
 
-  ro_0004004:
-    description: RO:0004004 object property targets.
+  has_material_basis_in:
+    description: General material basis (RO:0004004).
     slot_uri: RO:0004004
     multivalued: true
-    range: uriorcurie
+    range: OntologyTerm
     annotations:
-      owl: AnnotationAssertion
+      owl: ObjectSomeValuesFrom
 
-  bfo_0000050:
-    description: BFO:0000050 object property targets.
+  part_of:
+    description: Part-of relationship (BFO:0000050).
     slot_uri: BFO:0000050
     multivalued: true
-    range: uriorcurie
+    range: OntologyTerm
     annotations:
-      owl: AnnotationAssertion
+      owl: ObjectSomeValuesFrom
 
-  bfo_0000051:
-    description: BFO:0000051 object property targets.
+  has_part:
+    description: Has-part relationship (BFO:0000051).
     slot_uri: BFO:0000051
     multivalued: true
-    range: uriorcurie
+    range: OntologyTerm
     annotations:
-      owl: AnnotationAssertion
+      owl: ObjectSomeValuesFrom
 
   # -- Hierarchy --
 
@@ -373,17 +351,9 @@ slots:
     annotations:
       owl: SubClassOf
 
-  is_root:
-    description: >-
-      True when this term has no named source-ontology parents and sits at the top of
-      the hierarchy. Relaxes the parents requirement.
-    range: boolean
-    ifabsent: "false"
-
   deprecated:
     description: True when this term is marked owl:deprecated.
     slot_uri: owl:deprecated
     range: boolean
-    ifabsent: "false"
     annotations:
       owl: AnnotationAssertion
