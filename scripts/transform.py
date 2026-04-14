@@ -7,16 +7,15 @@ property strip). Reads rdfs:label, obo:IAO_0000115 (was efo:definition),
 oboInOwl:hasExactSynonym (was efo:alternative_term), rdfs:subClassOf, skos:notation,
 oboInOwl:hasDbXref, BFO:0000050 restrictions, and owl:deprecated directly.
 
-Filters to ORDO disease classes only (those whose skos:notation contains an ORPHA code,
-e.g. "ORPHA:284963"). Non-disease classes (genes, anatomy, modes of inheritance, etc.)
-are excluded.
+Includes all Orphanet numeric class IRIs with a non-empty label, except direct children of
+Orphanet:C010 (genetic material subtree). Xrefs and ORPHA notations merge into skos_exact_match.
 
-Input:  ordo.owl (after make build)
+Input:  tmp/transformed-ordo.owl (ROBOT component output)
 Output: ordo.yaml  (conforms to linkml/mondo_source_schema.yaml)
 
 Usage:
     python scripts/transform.py \\
-        --input ordo.owl \\
+        --input tmp/transformed-ordo.owl \\
         --schema linkml/mondo_source_schema.yaml \\
         --output ordo.yaml
 """
@@ -153,8 +152,9 @@ def extract_ontology_document(g: Graph) -> dict:
 def extract_terms(g: Graph) -> list[dict]:
     """
     Extract ORDO disease classes from the component graph.
-    Filters to classes with an ORPHA code in skos:notation (excludes genes,
-    anatomy, inheritance modes, and other non-disease classes).
+
+    Drops direct children of the non-disease root Orphanet:C010; all other Orphanet
+    numeric classes with a label are included (including grouping classes without ORPHA codes).
     """
     candidate_iris: set[str] = {
         str(s)

@@ -32,7 +32,7 @@ OUTPUT_OWL_LINKML := $(SOURCE).owl
 YAML_OUT        := $(SOURCE).yaml
 
 # ── Phony targets ─────────────────────────────────────────────────────────────
-.PHONY: all build clean mirror robot-plugins reports dependencies help update-schema
+.PHONY: all build clean mirror robot-plugins reports dependencies help update-schema verify
 
 # ── Generic targets ───────────────────────────────────────────────────────────
 
@@ -61,8 +61,12 @@ $(MIRROR_OWL): $(RAW_OWL) | robot-plugins
 build: $(OUTPUT_OWL) | dependencies
 	python $(SCRIPTS_DIR)/transform.py --input $(OUTPUT_OWL) --schema $(SCHEMA) --output $(YAML_OUT)
 	python -m linkml.validator.cli --schema $(SCHEMA) --target-class OntologyDocument $(YAML_OUT)
+	python $(SCRIPTS_DIR)/verify.py --yaml $(YAML_OUT)
 	python -m linkml_owl.dumpers.owl_dumper --schema $(SCHEMA) -o $(OUTPUT_OWL_LINKML) $(YAML_OUT)
 	@echo "Build complete: $(YAML_OUT), $(OUTPUT_OWL) (ROBOT), $(OUTPUT_OWL_LINKML) (LinkML)"
+
+verify:
+	python $(SCRIPTS_DIR)/verify.py --yaml $(YAML_OUT)
 
 PREFIXES_METRICS=--prefix 'OMIM: http://omim.org/entry/' \
 	--prefix 'CHR: http://purl.obolibrary.org/obo/CHR_' \
@@ -101,6 +105,7 @@ Usage: [IMAGE=(odklite|odkfull)] [ODK_DEBUG=yes] sh odk.sh make [(MIR)=(false|tr
 Core commands:
 * all:			Run the entire pipeline (build + reports).
 * build:		Run the entire release pipeline. Use make MIR=false build to avoid re-downloading.
+* verify:		Run structural checks on $(YAML_OUT) (also runs at end of build).
 * mirror:		Just obtain the raw source.
 * reports:		Create reports from built artifacts.
 * clean:		Delete all temporary files and reports.

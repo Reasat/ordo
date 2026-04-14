@@ -66,4 +66,4 @@ This document records events during the ingest session that deviated from the ex
 **Phase:** 7 (Derive OWL)  
 **What happened:** `linkml-owl` raised `ValueError: Clinical subtype is not a valid URI or CURIE` during OWL derivation.  
 **Root cause:** The transform was storing ORDO's clinical type notations (e.g., "Clinical subtype", "Group of disorders") in the `in_subsets` slot, which has `range: uriorcurie` in the schema. These are plain strings, not URIs or CURIEs.  
-**Resolution:** Removed the clinical type strings from the output entirely. ORPHA codes (the other `skos:notation` value type) were already correctly captured in `database_cross_references`. Re-ran the transform and `linkml-owl` succeeded.
+**Resolution:** Removed the clinical type strings from the output entirely. ORPHA codes from `skos:notation` are merged into `skos_exact_match` together with `oboInOwl:hasDbXref` values. Re-ran the transform and `linkml-owl` succeeded.

@@ -19,3 +19,8 @@
 | Deprecated without replacement | 240 |
 | Dangling parent references | 0 |
 | BFO:0000050 (part-of) cross-classification links | present on majority of active terms |
+
+## Phase 9 verification
+
+- `python scripts/verify.py --yaml ordo.yaml` — PASS (duplicate IDs, labels, parent resolution).
+- `linkml-validate` — run as part of `make build` (target class `OntologyDocument`).
