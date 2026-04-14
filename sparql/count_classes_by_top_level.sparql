@@ -1,0 +1,16 @@
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+
+SELECT ?top_level_id ?top_level_label (COUNT(DISTINCT ?cls) AS ?count)
+WHERE {
+  VALUES ?top_level_id {
+    <http://www.orpha.net/ORDO/Orphanet_557493>
+    <http://www.orpha.net/ORDO/Orphanet_557492>
+    <http://www.orpha.net/ORDO/Orphanet_557494>
+  }
+  ?top_level_id rdfs:label ?top_level_label .
+
+  ?cls a owl:Class ;
+       rdfs:subClassOf+ ?top_level_id .
+}
+GROUP BY ?top_level_id ?top_level_label

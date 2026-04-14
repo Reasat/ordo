@@ -59,6 +59,20 @@ def is_ordo_disease_iri(iri: str) -> bool:
     return suffix.isdigit()
 
 
+# Non-disease classification roots whose children should be excluded (e.g. gene types)
+EXCLUDED_PARENTS = {
+    ORDO_IRI_PREFIX + "C010",  # genetic material (gene with protein product, non coding RNA, etc.)
+}
+
+
+def is_child_of_excluded(g: Graph, subj: URIRef) -> bool:
+    """True if any rdfs:subClassOf target is in the excluded parent set."""
+    for o in g.objects(subj, RDFS.subClassOf):
+        if isinstance(o, URIRef) and str(o) in EXCLUDED_PARENTS:
+            return True
+    return False
+
+
 def iri_to_curie(iri: str) -> str:
     if iri.startswith(ORDO_IRI_PREFIX):
         return ORDO_CURIE_PREFIX + iri[len(ORDO_IRI_PREFIX):]
@@ -87,11 +101,11 @@ def _uri_or_literal_values(g: Graph, subj: URIRef, pred) -> list[str]:
 
 # ── Graph traversal ─────────────────────────────────────────────────────────
 
-def get_direct_ordo_parents(g: Graph, subj: URIRef) -> list[str]:
+def get_direct_ordo_parents(g: Graph, subj: URIRef, excluded_iris: set[str]) -> list[str]:
     """Return CURIEs of direct rdfs:subClassOf targets that are ORDO disease IRIs."""
     parents = []
     for o in g.objects(subj, RDFS.subClassOf):
-        if isinstance(o, URIRef) and is_ordo_disease_iri(str(o)):
+        if isinstance(o, URIRef) and is_ordo_disease_iri(str(o)) and str(o) not in excluded_iris:
             parents.append(iri_to_curie(str(o)))
     return sorted(parents)
 
@@ -148,9 +162,15 @@ def extract_terms(g: Graph) -> list[dict]:
         if isinstance(s, URIRef) and is_ordo_disease_iri(str(s))
     }
 
+    # Build set of IRIs to exclude (children of non-disease roots like C010)
+    excluded_iris: set[str] = {
+        iri for iri in candidate_iris
+        if is_child_of_excluded(g, URIRef(iri))
+    }
+
     terms: list[dict] = []
 
-    for iri in sorted(candidate_iris):
+    for iri in sorted(candidate_iris - excluded_iris):
         subj = URIRef(iri)
 
         curie = iri_to_curie(iri)
@@ -177,7 +197,7 @@ def extract_terms(g: Graph) -> list[dict]:
         ]
 
         # ── Parents (direct is-a) ──────────────────────────────────────────────
-        parent_curies = get_direct_ordo_parents(g, subj)
+        parent_curies = get_direct_ordo_parents(g, subj, excluded_iris)
 
         # ── BFO part-of cross-classification ──────────────────────────────────
         part_of_targets = get_bfo_part_of_targets(g, subj)
@@ -193,40 +213,27 @@ def extract_terms(g: Graph) -> list[dict]:
         if definition:
             term["definition"] = definition
         if exact_syns:
-            term["exact_synonyms"] = sorted(set(exact_syns))
-        if is_root:
-            term["is_root"] = True
-        else:
+            term["exact_synonyms"] = [{"synonym_text": s} for s in sorted(set(exact_syns))]
+        if not is_root:
             term["parents"] = parent_curies
         if part_of_targets:
-            term["bfo_0000050"] = part_of_targets
+            term["part_of"] = part_of_targets
 
         # ── Optional annotation slots ──────────────────────────────────────────
         for key, pred in (
             ("related_synonyms", OBOINOWL.hasRelatedSynonym),
             ("narrow_synonyms", OBOINOWL.hasNarrowSynonym),
             ("broad_synonyms", OBOINOWL.hasBroadSynonym),
-            ("obo_has_close_synonym", OBOINOWL.hasCloseSynonym),
         ):
             vals = _literal_values(g, subj, pred)
             if vals:
-                term[key] = vals
+                term[key] = [{"synonym_text": s} for s in vals]
 
-        for key, pred in (
-            ("database_cross_references", OBOINOWL.hasDbXref),
-            ("comments", RDFS.comment),
-        ):
-            vals = _uri_or_literal_values(g, subj, pred)
-            if vals:
-                term[key] = vals
-
-        # skos:notation values — separate ORPHA codes from clinical type labels
+        # Collect xrefs and ORPHA notation codes → merge into skos:exactMatch
+        xrefs = _uri_or_literal_values(g, subj, OBOINOWL.hasDbXref)
         notations = _uri_or_literal_values(g, subj, SKOS.notation)
         orpha_codes = [n for n in notations if ORPHA_CODE_RE.match(n)]
-        if orpha_codes:
-            existing_xrefs = term.get("database_cross_references", [])
-            combined = sorted(set(existing_xrefs + orpha_codes))
-            term["database_cross_references"] = combined
+        all_xrefs = sorted(set(xrefs + orpha_codes))
 
         for key, pred in (
             ("skos_exact_match", SKOS.exactMatch),
@@ -237,6 +244,11 @@ def extract_terms(g: Graph) -> list[dict]:
             vals = _uri_or_literal_values(g, subj, pred)
             if vals:
                 term[key] = vals
+
+        # Merge xrefs into skos:exactMatch
+        if all_xrefs:
+            existing = term.get("skos_exact_match", [])
+            term["skos_exact_match"] = sorted(set(existing + all_xrefs))
 
         terms.append(term)
 
@@ -259,9 +271,21 @@ def transform(input_path: Path, output_path: Path) -> None:
 
     doc["terms"] = terms
 
+    # Use a dumper that quotes all strings to avoid linkml-owl parsing issues
+    # with values containing commas, colons, etc.
+    class QuotedDumper(yaml.Dumper):
+        pass
+
+    QuotedDumper.add_representer(
+        str,
+        lambda dumper, data: dumper.represent_scalar("tag:yaml.org,2002:str", data, style="'")
+        if any(c in data for c in ",:{}")
+        else dumper.represent_scalar("tag:yaml.org,2002:str", data),
+    )
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as fh:
-        yaml.dump(doc, fh, allow_unicode=True, sort_keys=False, default_flow_style=False)
+        yaml.dump(doc, fh, Dumper=QuotedDumper, allow_unicode=True, sort_keys=False, default_flow_style=False)
 
     print(f"Written: {output_path}", file=sys.stderr)
 

@@ -1,88 +1,117 @@
-# ORDO — Orphanet Rare Disease Ontology ingest. See docs/plan.md.
+# Mondo source ingest pipeline.
 #
 # Pipeline:
-#   make acquire      — download latest ORDO OWL (no auth needed)
-#   make build        — ROBOT preprocessing → ordo.owl
-#   make build-release — build + transform → validate → LinkML OWL
+#   make mirror     — download the raw source OWL
+#   make build      — mirror + ROBOT preprocessing + transform + validate + LinkML OWL
+#   make reports    — generate QC reports
+#   make all        — build + reports
 #
-# Requires: ROBOT (≥ 1.9), obolibrary/odkfull Docker image for CI, uv for Python.
+# Requires: ROBOT (≥ 1.9), uv for Python.
 
+# ── Source identity (override per source) ─────────────────────────────────────
+SOURCE      ?= ordo
+
+# ── Shared variables ──────────────────────────────────────────────────────────
 ROBOT       ?= robot
-# Local plugin path — overridden to /tools/robot-plugins inside obolibrary/odkfull Docker (CI).
-ROBOT_PLUGINS_DIRECTORY ?= /home/reasat/.robot/plugins
-PYTHON      ?= python3
-UV_RUN      ?= uv run --no-sync
 CONFIG_DIR  := config
 SCRIPTS_DIR := scripts
 SPARQL_DIR  := sparql
 TMP_DIR     := tmp
-OUTPUT_OWL  := ordo.owl
-OUTPUT_OWL_LINKML := ordo_from_linkml.owl
-MIRROR_OWL  := $(TMP_DIR)/mirror-ordo.owl
-RAW_OWL     := $(TMP_DIR)/ordo_raw.owl
-YAML_OUT    := ordo.yaml
+PLUGINS_DIR := $(TMP_DIR)/plugins
 SCHEMA      := linkml/mondo_source_schema.yaml
-
-# Override to pin a specific version: make acquire ORDO_URL=https://.../ORDO_en_4.9.owl
-ORDO_URL    ?=
+SCHEMA_URL  ?= https://raw.githubusercontent.com/TODO/mondo-source-schema/main/linkml/mondo_source_schema.yaml
 URIBASE     := http://purl.obolibrary.org/obo
 TODAY       ?= $(shell date +%Y-%m-%d)
+MIR         ?= true
 
-.PHONY: all build build-release clean acquire resolve-version
+# Derived paths (generic, based on SOURCE)
+RAW_OWL         := $(TMP_DIR)/$(SOURCE)_raw.owl
+MIRROR_OWL      := $(TMP_DIR)/mirror-$(SOURCE).owl
+OUTPUT_OWL      := $(TMP_DIR)/transformed-$(SOURCE).owl
+OUTPUT_OWL_LINKML := $(SOURCE).owl
+YAML_OUT        := $(SOURCE).yaml
 
-all: build
+# ── Phony targets ─────────────────────────────────────────────────────────────
+.PHONY: all build clean mirror robot-plugins reports dependencies help update-schema
 
-$(TMP_DIR):
-	mkdir -p $(TMP_DIR)
+# ── Generic targets ───────────────────────────────────────────────────────────
 
-# Download latest ORDO OWL (version auto-resolved; override with ORDO_URL=...)
-$(RAW_OWL): | $(TMP_DIR)
-	$(UV_RUN) python $(SCRIPTS_DIR)/acquire.py --output $@ $(if $(ORDO_URL),--url $(ORDO_URL),)
-	@echo "Downloaded: $@"
+all: build reports
 
-acquire: $(RAW_OWL)
+mirror: $(RAW_OWL)
 
-resolve-version: $(RAW_OWL)
-	$(UV_RUN) python $(SCRIPTS_DIR)/resolve_version.py --input $(RAW_OWL)
+robot-plugins:
+	mkdir -p $(PLUGINS_DIR)
+	if [ -d /tools/robot-plugins ]; then cp /tools/robot-plugins/*.jar $(PLUGINS_DIR)/; fi
+	if [ -d plugins ] && ls plugins/*.jar >/dev/null 2>&1; then cp plugins/*.jar $(PLUGINS_DIR)/; fi
+
+dependencies:
+	pip install --quiet --break-system-packages linkml-owl==0.5.0 \
+		"linkml @ git+https://github.com/linkml/linkml.git@main#subdirectory=packages/linkml" \
+		"linkml-runtime @ git+https://github.com/linkml/linkml.git@main#subdirectory=packages/linkml_runtime"
 
 # Mirror: merge + normalize
-$(MIRROR_OWL): $(RAW_OWL) | $(TMP_DIR)
-	ROBOT_PLUGINS_DIRECTORY=$(ROBOT_PLUGINS_DIRECTORY) \
+$(MIRROR_OWL): $(RAW_OWL) | robot-plugins
+	export ROBOT_PLUGINS_DIRECTORY=$(PLUGINS_DIR) && \
 	$(ROBOT) merge -i $(RAW_OWL) \
 		odk:normalize --add-source true \
 		-o $@
 	@echo "Built $@"
 
-# ORDO component: rename properties, fix reification, flatten replacements, add exact synonyms, filter
-$(OUTPUT_OWL): $(MIRROR_OWL) \
-		$(CONFIG_DIR)/property-map.sssom.tsv $(CONFIG_DIR)/properties.txt \
-		$(SPARQL_DIR)/fix-complex-reification-ordo.ru \
-		$(SPARQL_DIR)/ordo-flatten-replacements.ru \
-		$(SPARQL_DIR)/exact_syn_from_label.ru
-	$(ROBOT) remove -i $(MIRROR_OWL) --select imports \
-		rename --mappings $(CONFIG_DIR)/property-map.sssom.tsv \
-			--allow-missing-entities true --allow-duplicates true \
-		query \
-			--update $(SPARQL_DIR)/fix-complex-reification-ordo.ru \
-			--update $(SPARQL_DIR)/ordo-flatten-replacements.ru \
-			--update $(SPARQL_DIR)/exact_syn_from_label.ru \
-		remove -T $(CONFIG_DIR)/properties.txt --select complement --select properties --trim true \
-		annotate \
-			--ontology-iri $(URIBASE)/mondo/sources/ordo.owl \
-			--version-iri $(URIBASE)/mondo/sources/$(TODAY)/ordo.owl \
-		-o $@
-	@echo "Built $@"
-
-build: $(OUTPUT_OWL)
-	@echo "Build complete: $(OUTPUT_OWL)"
-
-# ROBOT component + LinkML transform + validate + data2owl
-build-release: build
-	$(UV_RUN) python $(SCRIPTS_DIR)/transform.py --input $(OUTPUT_OWL) --schema $(SCHEMA) --output $(YAML_OUT)
-	$(UV_RUN) python -m linkml.validator.cli --schema $(SCHEMA) --target-class OntologyDocument $(YAML_OUT)
-	$(UV_RUN) python -m linkml_owl.dumpers.owl_dumper --schema $(SCHEMA) -o $(OUTPUT_OWL_LINKML) $(YAML_OUT)
+build: $(OUTPUT_OWL) | dependencies
+	python $(SCRIPTS_DIR)/transform.py --input $(OUTPUT_OWL) --schema $(SCHEMA) --output $(YAML_OUT)
+	python -m linkml.validator.cli --schema $(SCHEMA) --target-class OntologyDocument $(YAML_OUT)
+	python -m linkml_owl.dumpers.owl_dumper --schema $(SCHEMA) -o $(OUTPUT_OWL_LINKML) $(YAML_OUT)
 	@echo "Build complete: $(YAML_OUT), $(OUTPUT_OWL) (ROBOT), $(OUTPUT_OWL_LINKML) (LinkML)"
+
+PREFIXES_METRICS=--prefix 'OMIM: http://omim.org/entry/' \
+	--prefix 'CHR: http://purl.obolibrary.org/obo/CHR_' \
+	--prefix 'UMLS: http://linkedlifedata.com/resource/umls/id/' \
+	--prefix 'HGNC: https://www.genenames.org/data/gene-symbol-report/\#!/hgnc_id/' \
+	--prefix 'biolink: https://w3id.org/biolink/vocab/'
+
+reports:
+	mkdir -p reports
+	$(ROBOT) measure $(PREFIXES_METRICS) -i $(OUTPUT_OWL_LINKML) --format json --metrics extended --output reports/metrics.json
+	$(ROBOT) query -i $(MIRROR_OWL) --query $(SPARQL_DIR)/count_classes_by_top_level.sparql reports/mirror-top-level-counts.tsv
+	$(ROBOT) query -i $(OUTPUT_OWL) --query $(SPARQL_DIR)/count_classes_by_top_level.sparql reports/transformed-top-level-counts.tsv
+	$(ROBOT) query -i $(OUTPUT_OWL_LINKML) --query $(SPARQL_DIR)/count_classes_by_top_level.sparql reports/top-level-counts.tsv
 
 clean:
 	rm -f $(OUTPUT_OWL) $(OUTPUT_OWL_LINKML) $(YAML_OUT)
 	rm -rf $(TMP_DIR)
+	rm -rf reports
+
+$(TMP_DIR):
+	mkdir -p $(TMP_DIR)
+
+update-schema:
+	wget $(SCHEMA_URL) -O $(SCHEMA)
+	@echo "Updated schema from $(SCHEMA_URL)"
+
+help:
+	@echo "$$data"
+
+define data
+Usage: [IMAGE=(odklite|odkfull)] [ODK_DEBUG=yes] sh odk.sh make [(MIR)=(false|true)] command
+
+----------------------------------------
+	Command reference
+----------------------------------------
+Core commands:
+* all:			Run the entire pipeline (build + reports).
+* build:		Run the entire release pipeline. Use make MIR=false build to avoid re-downloading.
+* mirror:		Just obtain the raw source.
+* reports:		Create reports from built artifacts.
+* clean:		Delete all temporary files and reports.
+* help:			Print usage information.
+
+Dependency management:
+* robot-plugins:	Install ROBOT plugins from ODK container or local plugins/ directory.
+* dependencies:		Install Python dependencies not part of the ODK container.
+
+endef
+export data
+
+# ── Include source-specific rules ─────────────────────────────────────────────
+include project.Makefile
