@@ -40,7 +40,7 @@ jobs:
 
       - name: Set release tag
         id: version
-        run: echo "tag=v$(date +%Y%m%d)-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+        run: echo "tag=v$(date +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
       - name: Create release and upload assets
         if: success() && hashFiles('ordo.yaml') != ''
