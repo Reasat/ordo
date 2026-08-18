@@ -31,8 +31,12 @@ OUTPUT_OWL      := $(TMP_DIR)/transformed-$(SOURCE).owl
 OUTPUT_OWL_LINKML := $(SOURCE).owl
 YAML_OUT        := $(SOURCE).yaml
 
+# linkml-owl emits OWL Functional Syntax; we convert to RDF/XML for releases/bundles.
+FUNCTIONAL_OWL := $(TMP_DIR)/$(SOURCE).functional.owl
+RDFXML_OUT     := $(TMP_DIR)/$(SOURCE).rdfxml.owl
+
 # ── Phony targets ─────────────────────────────────────────────────────────────
-.PHONY: all build clean mirror robot-plugins reports dependencies help update-schema verify
+.PHONY: all build clean mirror robot-plugins reports dependencies help update-schema verify build-release release-dirs
 
 # ── Generic targets ───────────────────────────────────────────────────────────
 
@@ -62,8 +66,10 @@ build: $(OUTPUT_OWL) | dependencies
 	python $(SCRIPTS_DIR)/transform.py --input $(OUTPUT_OWL) --schema $(SCHEMA) --output $(YAML_OUT)
 	python -m linkml.validator.cli --schema $(SCHEMA) --target-class OntologyDocument $(YAML_OUT)
 	python $(SCRIPTS_DIR)/verify.py --yaml $(YAML_OUT)
-	python -m linkml_owl.dumpers.owl_dumper --schema $(SCHEMA) -o $(OUTPUT_OWL_LINKML) $(YAML_OUT)
-	@echo "Build complete: $(YAML_OUT), $(OUTPUT_OWL) (ROBOT), $(OUTPUT_OWL_LINKML) (LinkML)"
+	python -m linkml_owl.dumpers.owl_dumper --schema $(SCHEMA) -o $(FUNCTIONAL_OWL) $(YAML_OUT)
+	$(ROBOT) convert -i $(FUNCTIONAL_OWL) -o $(RDFXML_OUT)
+	mv $(RDFXML_OUT) $(OUTPUT_OWL_LINKML)
+	@echo "Build complete: $(YAML_OUT), $(OUTPUT_OWL) (ROBOT), $(OUTPUT_OWL_LINKML) (RDF/XML release)"
 
 verify:
 	python $(SCRIPTS_DIR)/verify.py --yaml $(YAML_OUT)
@@ -120,3 +126,68 @@ export data
 
 # ── Include source-specific rules ─────────────────────────────────────────────
 include project.Makefile
+
+############################
+### External-wget bundle ###
+############################
+
+# ICD10WHO-style bundle contract for mondo-ingest wget:
+# - ordo.owl (RDF/XML)
+# - mirror-ordo.owl
+# - ordo.db (semsql)
+# - reports/mirror_signature-ordo.tsv
+# - reports/component_signature-ordo.tsv
+# - mappings/ordo.sssom.tsv
+# - metadata/ordo-metrics.json
+
+MIRROR_OWL_RELEASE := mirror-$(SOURCE).owl
+DB_RELEASE := $(SOURCE).db
+
+MIRROR_SIGNATURE := reports/mirror_signature-$(SOURCE).tsv
+COMPONENT_SIGNATURE := reports/component_signature-$(SOURCE).tsv
+
+SSSOM_TSV := mappings/$(SOURCE).sssom.tsv
+METRICS_JSON_RELEASE := metadata/$(SOURCE)-metrics.json
+
+SEMSQL_OWL := $(TMP_DIR)/$(SOURCE)-semsql.owl
+SEMSQL_DB := $(TMP_DIR)/$(SOURCE)-semsql.db
+PREFIXES_CSV := $(TMP_DIR)/prefixes.csv
+
+.PRECIOUS: $(MIRROR_OWL_RELEASE) $(DB_RELEASE) $(MIRROR_SIGNATURE) $(COMPONENT_SIGNATURE) $(SSSOM_TSV) $(METRICS_JSON_RELEASE)
+
+build-release: build reports $(MIRROR_OWL_RELEASE) $(DB_RELEASE) $(MIRROR_SIGNATURE) $(COMPONENT_SIGNATURE) $(SSSOM_TSV) $(METRICS_JSON_RELEASE)
+	@echo "External bundle complete."
+
+$(MIRROR_OWL_RELEASE): $(MIRROR_OWL) | release-dirs
+	cp -f $(MIRROR_OWL) $@
+
+release-dirs:
+	mkdir -p mappings metadata reports
+
+$(PREFIXES_CSV): $(FUNCTIONAL_OWL)
+	python $(SCRIPTS_DIR)/extract_prefixes.py --input $(FUNCTIONAL_OWL) --output $(PREFIXES_CSV)
+
+$(DB_RELEASE): $(SEMSQL_OWL) $(PREFIXES_CSV) | release-dirs
+	RUST_BACKTRACE=full semsql make $(SEMSQL_DB) -P $(PREFIXES_CSV)
+	mv $(SEMSQL_DB) $@
+
+$(SEMSQL_OWL): $(OUTPUT_OWL_LINKML) | $(TMP_DIR)
+	cp -f $(OUTPUT_OWL_LINKML) $@
+
+$(MIRROR_SIGNATURE): $(MIRROR_OWL_RELEASE) sparql/classes.sparql | release-dirs
+	$(ROBOT) query -i $(MIRROR_OWL_RELEASE) --query sparql/classes.sparql $@
+	(head -n 1 $@ && tail -n +2 $@ | sort) > $@-temp
+	mv $@-temp $@
+
+$(COMPONENT_SIGNATURE): $(OUTPUT_OWL_LINKML) sparql/classes.sparql | release-dirs
+	$(ROBOT) query -i $(OUTPUT_OWL_LINKML) --query sparql/classes.sparql $@
+	(head -n 1 $@ && tail -n +2 $@ | sort) > $@-temp
+	mv $@-temp $@
+
+$(SSSOM_TSV): $(OUTPUT_OWL_LINKML) metadata/$(SOURCE).metadata.sssom.yml | release-dirs
+	$(ROBOT) convert -i $(OUTPUT_OWL_LINKML) -f json -o $(TMP_DIR)/component-$(SOURCE).json
+	sssom parse $(TMP_DIR)/component-$(SOURCE).json -I obographs-json --prefix-map-mode merged -m metadata/$(SOURCE).metadata.sssom.yml -o $@
+	sssom sort $@ -o $@
+
+$(METRICS_JSON_RELEASE): reports/metrics.json | release-dirs
+	cp -f $< $@
