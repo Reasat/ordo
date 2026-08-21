@@ -82,17 +82,29 @@ jobs:
             exit 0
           fi
 
-          mkdir -p tmp/prev-release
+          # Do not use repo tmp/: Docker/odkfull often leaves it root-owned.
+          PREV_DIR="${RUNNER_TEMP:-/tmp}/prev-release"
+          rm -rf "$PREV_DIR"
+          mkdir -p "$PREV_DIR"
           CHANGED=false
           REASON=""
           for f in "${ASSETS[@]}"; do
             base=$(basename "$f")
-            if ! gh release download "$PREV" -p "$base" -D tmp/prev-release 2>/dev/null; then
+            # semsql .db bytes are often non-deterministic across rebuilds — skip in cmp.
+            if [[ "$base" == *.db ]]; then
+              if ! gh release download "$PREV" -p "$base" -D "$PREV_DIR" 2>/dev/null; then
+                CHANGED=true
+                REASON="new_asset:${base}"
+                break
+              fi
+              continue
+            fi
+            if ! gh release download "$PREV" -p "$base" -D "$PREV_DIR" 2>/dev/null; then
               CHANGED=true
               REASON="new_asset:${base}"
               break
             fi
-            if ! cmp -s "$f" "tmp/prev-release/$base"; then
+            if ! cmp -s "$f" "$PREV_DIR/$base"; then
               CHANGED=true
               REASON="content_change:${base}"
               break
