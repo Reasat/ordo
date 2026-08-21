@@ -186,7 +186,8 @@ $(COMPONENT_SIGNATURE): $(OUTPUT_OWL_LINKML) sparql/classes.sparql | release-dir
 
 $(SSSOM_TSV): $(OUTPUT_OWL_LINKML) metadata/$(SOURCE).metadata.sssom.yml | release-dirs
 	$(ROBOT) convert -i $(OUTPUT_OWL_LINKML) -f json -o $(TMP_DIR)/component-$(SOURCE).json
-	sssom parse $(TMP_DIR)/component-$(SOURCE).json -I obographs-json --prefix-map-mode merged -m metadata/$(SOURCE).metadata.sssom.yml -o $@
+	sssom parse $(TMP_DIR)/component-$(SOURCE).json -I obographs-json --prefix-map-mode merged -m metadata/$(SOURCE).metadata.sssom.yml -o $@ 2> reports/sssom-parse-warnings.log
+	@echo "sssom parse: $$(wc -l < reports/sssom-parse-warnings.log) warning line(s) → reports/sssom-parse-warnings.log"
 	sssom sort $@ -o $@
 
 $(METRICS_JSON_RELEASE): reports/metrics.json | release-dirs
