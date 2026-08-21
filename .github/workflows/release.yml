@@ -1,12 +1,19 @@
 # Build Mondo-ready ORDO OWL + LinkML YAML / OWL dump; publish release assets.
 # Pipeline: download latest ORDO OWL → ROBOT mirror → component (rename, fix reification,
-# exact-syn-from-label, property filter) → transform.py → validate → linkml-owl.
+# exact-syn-from-label, property filter) → transform.py → validate → linkml-owl → build-release.
 # See docs/plan.md. Stack: obolibrary/odkfull:v1.6 + linkml-owl==0.5.0 (via make dependencies).
+# Release-only-on-delta: publish only if canonical assets changed or new basenames appear.
 
 name: Build and release
 
 on:
   workflow_dispatch:
+    inputs:
+      force_release:
+        description: "Publish even if assets unchanged vs previous latest"
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: "0 0 * * 1"
   push:
@@ -19,6 +26,7 @@ on:
       - "scripts/**"
       - "pyproject.toml"
       - "uv.lock"
+      - ".github/workflows/release.yml"
 
 jobs:
   build-and-release:
@@ -38,16 +46,82 @@ jobs:
             obolibrary/odkfull:v1.6 \
             bash -lc "make dependencies && make build-release"
 
+      - name: Detect release delta
+        id: delta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.force_release || false }}
+        run: |
+          set -euo pipefail
+          ASSETS=(
+            ordo.yaml
+            ordo.owl
+            mirror-ordo.owl
+            ordo.db
+            reports/mirror_signature-ordo.tsv
+            reports/component_signature-ordo.tsv
+            metadata/ordo-metrics.json
+            mappings/ordo.sssom.tsv
+          )
+          for f in "${ASSETS[@]}"; do
+            test -f "$f" || { echo "Missing asset: $f"; exit 1; }
+          done
+
+          if [ "${FORCE_RELEASE}" = "true" ]; then
+            echo "Force release requested."
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "reason=force_release" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PREV=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
+          if [ -z "${PREV}" ]; then
+            echo "No previous release — will publish."
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "reason=bootstrap" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mkdir -p tmp/prev-release
+          CHANGED=false
+          REASON=""
+          for f in "${ASSETS[@]}"; do
+            base=$(basename "$f")
+            if ! gh release download "$PREV" -p "$base" -D tmp/prev-release 2>/dev/null; then
+              CHANGED=true
+              REASON="new_asset:${base}"
+              break
+            fi
+            if ! cmp -s "$f" "tmp/prev-release/$base"; then
+              CHANGED=true
+              REASON="content_change:${base}"
+              break
+            fi
+          done
+
+          if [ "$CHANGED" = true ]; then
+            echo "Delta detected ($REASON) vs $PREV — will publish."
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+          else
+            echo "No delta vs $PREV — skip release."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "reason=unchanged" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set release tag
         id: version
+        if: steps.delta.outputs.should_release == 'true'
         run: echo "tag=v$(date +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
       - name: Create release and upload assets
-        if: success() && hashFiles('ordo.owl') != ''
+        if: success() && steps.delta.outputs.should_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: Release ${{ steps.version.outputs.tag }}
+          body: |
+            Release reason: `${{ steps.delta.outputs.reason }}`
           files: |
             ordo.yaml
             ordo.owl
